@@ -65,6 +65,8 @@ pub const Tag = enum {
     enum_from_int,
     error_from_int,
     float_from_int,
+    fshl,
+    fshr,
     ptr_from_int,
     max,
     memcpy,
@@ -622,6 +624,20 @@ pub const list = list: {
             .{
                 .tag = .float_from_int,
                 .param_count = 1,
+            },
+        },
+        .{
+            "@fshl",
+            .{
+                .tag = .fshl,
+                .param_count = 3,
+            },
+        },
+        .{
+            "@fshr",
+            .{
+                .tag = .fshr,
+                .param_count = 3,
             },
         },
         .{

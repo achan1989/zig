@@ -9493,6 +9493,8 @@ fn builtinCall(
 
         .shl_exact => return shiftOp(gz, scope, ri, node, params[0], params[1], .shl_exact),
         .shr_exact => return shiftOp(gz, scope, ri, node, params[0], params[1], .shr_exact),
+        .fshl => return funnelShiftOp(gz, scope, ri, node, params[0], params[1], params[2], .fshl),
+        .fshr => return funnelShiftOp(gz, scope, ri, node, params[0], params[1], params[2], .fshr),
 
         .bit_offset_of => return offsetOf(gz, scope, ri, node, params[0], params[1], .bit_offset_of),
         .offset_of     => return offsetOf(gz, scope, ri, node, params[0], params[1], .offset_of),
@@ -9970,6 +9972,34 @@ fn shiftOp(
     const result = try gz.addPlNode(tag, node, Zir.Inst.Bin{
         .lhs = lhs,
         .rhs = rhs,
+    });
+    return rvalue(gz, ri, result, node);
+}
+
+fn funnelShiftOp(
+    gz: *GenZir,
+    scope: *Scope,
+    ri: ResultInfo,
+    node: Ast.Node.Index,
+    a_node: Ast.Node.Index,
+    b_node: Ast.Node.Index,
+    c_node: Ast.Node.Index,
+    tag: Zir.Inst.Extended,
+) InnerError!Zir.Inst.Ref {
+    const a = try expr(gz, scope, .{ .rl = .none }, a_node);
+    const b = try expr(gz, scope, .{ .rl = .none }, b_node);
+    const c = try expr(gz, scope, .{ .rl = .none }, c_node);
+
+    // const result = try gz.addPlNode(tag, node, Zir.Inst.FunnelShift{
+    //     .a = a,
+    //     .b = b,
+    //     .c = c,
+    // });
+    const result = try gz.addExtendedPayload(tag, Zir.Inst.FunnelShift{
+        .node = gz.nodeIndexToRelative(node),
+        .a = a,
+        .b = b,
+        .c = c,
     });
     return rvalue(gz, ri, result, node);
 }

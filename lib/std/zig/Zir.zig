@@ -2090,6 +2090,11 @@ pub const Inst = struct {
         /// `operand` is `Zir.Inst.Ref` of the loaded LHS (*not* its type).
         /// `small` is an `Inst.InplaceOp`.
         inplace_arith_result_ty,
+        /// Implements the `@fshl` builtin.
+        /// `operand` is some extra thingy TBD?
+        fshl,
+        /// Implements the `@fshr` builtin.
+        fshr,
 
         pub const InstData = struct {
             opcode: Extended,
@@ -3556,6 +3561,18 @@ pub const Inst = struct {
         /// If `.none`, restore unconditionally.
         operand: Ref,
     };
+
+    pub const FunnelShift = struct {
+        node: i32,
+        a: Ref,
+        b: Ref,
+        c: Ref,
+        // Direction to come from extended.opcode?
+        // direction: enum {
+        //     left,
+        //     right,
+        // },
+    };
 };
 
 pub const SpecialProng = enum { none, @"else", under };
@@ -4042,6 +4059,8 @@ fn findDeclsInner(
                 .builtin_value,
                 .branch_hint,
                 .inplace_arith_result_ty,
+                .fshl,
+                .fshr,
                 => return,
 
                 // `@TypeOf` has a body.
