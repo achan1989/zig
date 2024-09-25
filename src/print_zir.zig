@@ -621,6 +621,10 @@ const Writer = struct {
             .field_parent_ptr => try self.writeFieldParentPtr(stream, extended),
             .builtin_value => try self.writeBuiltinValue(stream, extended),
             .inplace_arith_result_ty => try self.writeInplaceArithResultTy(stream, extended),
+
+            .fshl,
+            .fshr,
+            => try self.writeFsh(stream, extended),
         }
     }
 
@@ -2956,5 +2960,17 @@ const Writer = struct {
             try self.writeInstToStream(stream, inst);
             try stream.writeByte('\n');
         }
+    }
+
+    fn writeFsh(self: *Writer, stream: anytype, extended: Zir.Inst.Extended.InstData) !void {
+        const extra = self.code.extraData(Zir.Inst.FunnelShift, extended.operand).data;
+
+        try self.writeInstRef(stream, extra.a);
+        try stream.writeAll(", ");
+        try self.writeInstRef(stream, extra.b);
+        try stream.writeAll(", ");
+        try self.writeInstRef(stream, extra.c);
+        try stream.writeAll(")) ");
+        try self.writeSrcNode(stream, extra.node);
     }
 };
