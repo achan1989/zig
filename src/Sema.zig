@@ -1319,6 +1319,7 @@ fn analyzeBodyInner(
                     .work_group_id      => try sema.zirWorkItem(          block, extended, extended.opcode),
                     .in_comptime        => try sema.zirInComptime(        block),
                     .closure_get        => try sema.zirClosureGet(        block, extended),
+                    .fshl, .fshr        => try sema.zirFsh(block, extended, extended.opcode),
                     // zig fmt: on
 
                     .fence => {
@@ -16636,6 +16637,192 @@ fn zirRem(sema: *Sema, block: *Block, inst: Zir.Inst.Index) CompileError!Air.Ins
 
     const air_tag = airTag(block, is_int, .rem, .rem_optimized);
     return block.addBinOp(air_tag, casted_lhs, casted_rhs);
+}
+
+fn zirFsh(sema: *Sema, block: *Block, extended: Zir.Inst.Extended.InstData, zir_tag: Zir.Inst.Extended) CompileError!Air.Inst.Ref {
+    // Result is the most significant `bitcount` bits of: bit_concat(a, b) << (c mod bitcount)
+    // where `bitcount` is 8 for i8, etc.
+
+    const extra = sema.code.extraData(Zir.Inst.FunnelShift, extended.operand).data;
+    const src = block.nodeOffset(extra.node);
+
+    const a_src = block.builtinCallArgSrc(extra.node, 0);
+    const b_src = block.builtinCallArgSrc(extra.node, 1);
+    const c_src = block.builtinCallArgSrc(extra.node, 2);
+
+    const uncasted_a = try sema.resolveInst(extra.a);
+    const uncasted_b = try sema.resolveInst(extra.b);
+    const uncasted_c = try sema.resolveInst(extra.c);
+
+    const a_ty = sema.typeOf(uncasted_a);
+    const b_ty = sema.typeOf(uncasted_b);
+    const c_ty = sema.typeOf(uncasted_c);
+    const pt = sema.pt;
+    const zcu = pt.zcu;
+
+    try sema.checkVectorizableBinaryOperands(block, src, a_ty, b_ty, a_src, b_src);
+    try sema.checkVectorizableBinaryOperands(block, src, b_ty, c_ty, b_src, c_src);
+    // TODO: checkVectorizableBinaryOperands() treats both vectors and arrays as vectors.
+
+    const dest_ty = a_ty;
+    if (dest_ty.scalarType(zcu).zigTypeTag(zcu) != .int) {
+        return sema.fail(block, src, "expected vector of integers or integer tag type, found '{}'", .{dest_ty.fmt(pt)});
+    }
+
+    const a = try sema.coerce(block, dest_ty, uncasted_a, a_src);
+    const b = try sema.coerce(block, dest_ty, uncasted_b, b_src);
+    const c = try sema.coerce(block, dest_ty, uncasted_c, c_src);
+
+    const maybe_a_val = try sema.resolveValue(a);
+    const maybe_b_val = try sema.resolveValue(b);
+    const maybe_c_val = try sema.resolveValue(c);
+
+    var result = result: {
+        // if (maybe_c_val) |c_val| {
+        //     // "The shift argument is treated as an unsigned amount modulo the element size of the arguments".
+        //     if (try sema.bitCastVal(val, dest_ty, 0, 0, 0)) |result_val| {
+        //         // todo Air.internedToRef(result_val.toIntern());
+        //     }
+        //     const bitcount = dest_ty.scalarType(zcu).bitSizeSema(pt) catch unreachable;
+        //     const foo = try pt.intValue_u64(dest_ty, bitcount);
+        //     c_val.toUnsignedIntSema(pt) catch unreachable;
+        //     // todo how to accept/deal with signed vs unsiged.  compare to bitreverse, byteswap?
+        //     const shift = c_val.intMod(foo, dest_ty, allocator: Allocator, pt: Zcu.PerThread)
+        // }
+        // TODO: possible optimisation. If c mod bitcount == 0 then there's no shift, result is just a.
+        // But I can't figure out how to calculate c mod bitcount for vectors; would need to bitcast each element of c to unsigned, but can't bitcast vectors.
+        // Or do we? How does modulo work for signed in Zig?
+
+        if (maybe_a_val) |a_val| {
+            if (maybe_b_val) |b_val| {
+                if (maybe_c_val) |c_val| {
+                    const direction: FshDirection = switch (zir_tag) {
+                        .fshl => .left,
+                        .fshr => .right,
+                        else => unreachable,
+                    };
+                    break :result try sema.fsh(a_val, b_val, c_val, dest_ty, direction);
+                }
+            }
+        }
+
+        const runtime_src = if (maybe_a_val == null) a_src else if (maybe_b_val == null) b_src else c_src;
+        try sema.requireRuntimeBlock(block, src, runtime_src);
+
+        // const air_tag: Air.Inst.Tag = switch (zir_tag) {
+        //     .fshl => .fshl,
+        //     .fshr => .fshr,
+        //     else => unreachable,
+        // };
+        // _ = air_tag;
+        @panic("unimplemented fsh at runtime");
+
+        // return block.addInst(.{
+        //     .tag = air_tag,
+        //     .data = todo,
+        //     .data = .{ .ty_pl = .{
+        //         .ty = Air.internedToRef(tuple_ty.toIntern()),
+        //         .payload = try block.sema.addExtra(Air.Bin{
+        //             .lhs = lhs,
+        //             .rhs = rhs,
+        //         }),
+        //     } },
+        // });
+    };
+
+    return Air.internedToRef(result.toIntern());
+}
+
+const FshDirection = enum {
+    left,
+    right,
+};
+
+fn fsh(
+    sema: *Sema,
+    a_val: Value,
+    b_val: Value,
+    c_val: Value,
+    ty: Type,
+    direction: FshDirection,
+) !Value {
+    const pt = sema.pt;
+    const zcu = pt.zcu;
+    if (ty.zigTypeTag(zcu) == .vector) {
+        @panic("fuck it");
+        // const vec_len = ty.vectorLen(zcu);
+        // const result_data = try sema.arena.alloc(InternPool.Index, vec_len);
+        // const scalar_ty = ty.scalarType(zcu);
+        // for (result_data, 0..) |*scalar, i| {
+        //     todo
+        // }
+
+        // const overflowed_data = try sema.arena.alloc(InternPool.Index, vec_len);
+        // for (overflowed_data, result_data, 0..) |*of, *scalar, i| {
+        //     const lhs_elem = try lhs.elemValue(pt, i);
+        //     const rhs_elem = try rhs.elemValue(pt, i);
+        //     const of_math_result = try sema.intAddWithOverflowScalar(lhs_elem, rhs_elem, scalar_ty);
+        //     of.* = of_math_result.overflow_bit.toIntern();
+        //     scalar.* = of_math_result.wrapped_result.toIntern();
+        // }
+        // return Value.TodoFshResult{
+        //     .overflow_bit = Value.fromInterned(try pt.intern(.{ .aggregate = .{
+        //         .ty = (try pt.vectorType(.{ .len = vec_len, .child = .u1_type })).toIntern(),
+        //         .storage = .{ .elems = overflowed_data },
+        //     } })),
+        //     .wrapped_result = Value.fromInterned(try pt.intern(.{ .aggregate = .{
+        //         .ty = ty.toIntern(),
+        //         .storage = .{ .elems = result_data },
+        //     } })),
+        // };
+    }
+    return sema.fshScalar(a_val, b_val, c_val, ty, direction);
+}
+
+fn fshScalar(
+    sema: *Sema,
+    a: Value,
+    b: Value,
+    c: Value,
+    ty: Type,
+    direction: FshDirection,
+) !Value {
+    const pt = sema.pt;
+    const zcu = pt.zcu;
+    const info = ty.intInfo(zcu);
+
+    if (a.isUndef(zcu) or b.isUndef(zcu) or c.isUndef(zcu)) {
+        return try pt.undefValue(ty);
+    }
+
+    // "The shift argument is treated as an unsigned amount modulo the element size of the arguments".
+    const unsigned_ty = ty.toUnsigned(pt) catch unreachable;
+    const c_unsigned: Value = (try sema.bitCastVal(c, unsigned_ty, 0, 0, 0)).?;
+    // todo Air.internedToRef(c_unsigned.toIntern()) ??
+
+    const bitcount = ty.scalarType(zcu).bitSizeSema(pt) catch unreachable;
+    const bitcount_val = try pt.intValue_u64(unsigned_ty, bitcount);
+    // todo how to accept/deal with signed vs unsiged.  compare to bitreverse, byteswap?
+    const shift = (try c_unsigned.intMod(bitcount_val, unsigned_ty, sema.arena, pt)).toUnsignedInt(zcu);
+
+    var a_space: Value.BigIntSpace = undefined;
+    var b_space: Value.BigIntSpace = undefined;
+    const a_bigint = try a.toBigIntSema(&a_space, pt);
+    const b_bigint = try b.toBigIntSema(&b_space, pt);
+    const limbs = try sema.arena.alloc(
+        std.math.big.Limb,
+        std.math.big.int.calcTwosCompLimbCount(info.bits * 3),
+    );
+    var result_bigint = std.math.big.int.Mutable{ .limbs = limbs, .positive = undefined, .len = undefined };
+    result_bigint.shiftLeft(a_bigint, @as(usize, bitcount)); // was shift.toUnsignedInt(zcu)
+    result_bigint.bitOr(result_bigint.toConst(), b_bigint);
+    switch (direction) {
+        .left => result_bigint.shiftLeft(result_bigint.toConst(), shift),
+        .right => result_bigint.shiftRight(result_bigint.toConst(), shift),
+    }
+    result_bigint.shiftRight(result_bigint.toConst(), bitcount);
+    result_bigint.truncate(result_bigint.toConst(), info.signedness, info.bits);
+    return try pt.intValue_big(ty, result_bigint.toConst());
 }
 
 fn zirOverflowArithmetic(
