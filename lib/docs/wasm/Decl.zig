@@ -220,11 +220,14 @@ pub fn lookup(decl: *const Decl, name: []const u8) ?Decl.Index {
 /// Appends the fully qualified name to `out`.
 pub fn fqn(decl: *const Decl, out: *std.ArrayListUnmanaged(u8)) Oom!void {
     try decl.append_path(out);
+    std.log.debug("fqn initial: {s}", .{out.items[0..out.items.len]});
     if (decl.parent != .none) {
         try append_parent_ns(out, decl.parent);
         try out.appendSlice(gpa, decl.extra_info().name);
+        std.log.debug("fqn with parent: {s}", .{out.items[0..out.items.len]});
     } else {
         out.items.len -= 1; // remove the trailing '.'
+        std.log.debug("fqn has no parent", .{});
     }
 }
 

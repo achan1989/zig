@@ -93,8 +93,10 @@ pub const File = struct {
             const ast = file_index.get_ast();
             const node_tags = ast.nodes.items(.tag);
             const token_tags = ast.tokens.items(.tag);
+            std.log.debug("categorising file={d} node={d}", .{ @intFromEnum(file_index), node });
             switch (node_tags[node]) {
                 .root => {
+                    std.log.debug("is root", .{});
                     for (ast.rootDecls()) |member| {
                         switch (node_tags[member]) {
                             .container_field_init,
@@ -112,6 +114,7 @@ pub const File = struct {
                 .simple_var_decl,
                 .aligned_var_decl,
                 => {
+                    std.log.debug("is var decl", .{});
                     const var_decl = ast.fullVarDecl(node).?;
                     if (token_tags[var_decl.ast.mut_token] == .keyword_var)
                         return .{ .global_variable = node };
@@ -125,6 +128,7 @@ pub const File = struct {
                 .fn_proto_simple,
                 .fn_decl,
                 => {
+                    std.log.debug("is fn", .{});
                     var buf: [1]Ast.Node.Index = undefined;
                     const full = ast.fullFnProto(&buf, node).?;
                     return categorize_func(file_index, node, full);
@@ -174,6 +178,7 @@ pub const File = struct {
                 .tagged_union_two,
                 .tagged_union_two_trailing,
                 => {
+                    std.log.debug("is container or tagged union", .{});
                     var buf: [2]Ast.Node.Index = undefined;
                     const container_decl = ast.fullContainerDecl(&buf, node).?;
                     if (token_tags[container_decl.ast.main_token] != .keyword_struct) {
@@ -196,6 +201,7 @@ pub const File = struct {
                 => .{ .error_set = node },
 
                 .identifier => {
+                    std.log.debug("is ident", .{});
                     const name_token = ast.nodes.items(.main_token)[node];
                     const ident_name = ast.tokenSlice(name_token);
                     if (std.mem.eql(u8, ident_name, "type"))
@@ -217,6 +223,7 @@ pub const File = struct {
                 },
 
                 .field_access => {
+                    std.log.debug("is field access", .{});
                     const object_node = node_datas[node].lhs;
                     const dot_token = main_tokens[node];
                     const field_ident = dot_token + 1;
@@ -233,6 +240,7 @@ pub const File = struct {
                 },
 
                 .builtin_call_two, .builtin_call_two_comma => {
+                    std.log.debug("is builtin call2", .{});
                     if (node_datas[node].lhs == 0) {
                         const params = [_]Ast.Node.Index{};
                         return categorize_builtin_call(file_index, node, &params);
@@ -245,6 +253,7 @@ pub const File = struct {
                     }
                 },
                 .builtin_call, .builtin_call_comma => {
+                    std.log.debug("is builtin call", .{});
                     const params = ast.extra_data[node_datas[node].lhs..node_datas[node].rhs];
                     return categorize_builtin_call(file_index, node, params);
                 },
@@ -258,6 +267,7 @@ pub const File = struct {
                 .async_call,
                 .async_call_comma,
                 => {
+                    std.log.debug("is call", .{});
                     var buf: [1]Ast.Node.Index = undefined;
                     return categorize_call(file_index, node, ast.fullCall(&buf, node).?);
                 },
@@ -265,6 +275,7 @@ pub const File = struct {
                 .if_simple,
                 .@"if",
                 => {
+                    std.log.debug("is if", .{});
                     const if_full = ast.fullIf(node).?;
                     if (if_full.ast.else_expr != 0) {
                         const then_cat = categorize_expr_deep(file_index, if_full.ast.then_expr);
@@ -295,7 +306,10 @@ pub const File = struct {
                 .ptr_type,
                 .ptr_type_bit_range,
                 .anyframe_type,
-                => .type,
+                => {
+                    std.log.debug("is type", .{});
+                    return .type;
+                },
 
                 else => .{ .global_const = node },
             };
@@ -331,11 +345,15 @@ pub const File = struct {
             const builtin_token = main_tokens[node];
             const builtin_name = ast.tokenSlice(builtin_token);
             if (std.mem.eql(u8, builtin_name, "@import")) {
+                std.log.debug("is @import", .{});
                 const str_lit_token = main_tokens[params[0]];
                 const str_bytes = ast.tokenSlice(str_lit_token);
                 const file_path = std.zig.string_literal.parseAlloc(gpa, str_bytes) catch @panic("OOM");
+                std.log.debug("bytes: {s}", .{str_bytes});
+                std.log.debug("path: {s}", .{file_path});
                 defer gpa.free(file_path);
                 if (modules.get(file_path)) |imported_file_index| {
+                    std.log.debug("is import alias via modules.get()", .{});
                     return .{ .alias = File.Index.findRootDecl(imported_file_index) };
                 }
                 const base_path = file_index.path();
@@ -347,11 +365,13 @@ pub const File = struct {
                     base_path, file_path, resolved_path,
                 });
                 if (files.getIndex(resolved_path)) |imported_file_index| {
+                    std.log.debug("is import alias via resolved RootDecl", .{});
                     return .{ .alias = File.Index.findRootDecl(@enumFromInt(imported_file_index)) };
                 } else {
                     log.warn("import target '{s}' did not resolve to any file", .{resolved_path});
                 }
             } else if (std.mem.eql(u8, builtin_name, "@This")) {
+                std.log.debug("is @This", .{});
                 if (file_index.get().node_decls.get(node)) |decl_index| {
                     return .{ .alias = decl_index };
                 } else {

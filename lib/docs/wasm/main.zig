@@ -27,7 +27,7 @@ const js = struct {
 
 pub const std_options: std.Options = .{
     .logFn = logFn,
-    //.log_level = .debug,
+    .log_level = .debug,
 };
 
 pub fn panic(msg: []const u8, st: ?*std.builtin.StackTrace, addr: ?usize) noreturn {
@@ -859,8 +859,12 @@ export fn find_file_root() Decl.Index {
 /// Tries to look up the Decl component-wise but then falls back to a file path
 /// based scan.
 export fn find_decl() Decl.Index {
+    std.log.debug("find_decl() for {s}", .{input_string.items[0..input_string.items.len]});
     const result = Decl.find(input_string.items);
-    if (result != .none) return result;
+    if (result != .none) {
+        std.log.debug("found initial", .{});
+        return result;
+    }
 
     const g = struct {
         var match_fqn: std.ArrayListUnmanaged(u8) = .empty;
@@ -942,4 +946,12 @@ fn count_scalar(haystack: []const u8, needle: u8) usize {
             total += 1;
     }
     return total;
+}
+
+export fn num_decls() u32 {
+    return @intCast(Walk.decls.items.len);
+}
+
+export fn decl_is_public(decl: Decl.Index) bool {
+    return decl.get().is_pub();
 }

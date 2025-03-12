@@ -1,0 +1,87 @@
+main.js loads wasm with exported functions
+Page navigation == modifying the URL #fragment (eg localhost/#std.io)
+Javascript detects this and calls a JS render() function.
+This does various things depending on the mode. Primarily viewing a normal declaration vs module source.
+
+Much of javascript <--> wasm works with indexes and enums.
+There are JS functions to get data related to the item of interest, which are a thin wrapper around wasm functions.
+E.g. JS declIndexName() gets the string name of a declaration. Calls wasm.decl_name()
+
+renderDecl() to render a normal declaration.
+Call wasm.categorize_decl() to get the category of the declaration.
+Then render each kind differently, eg a namespace, global var, type, function...
+wasm.categorize_decl() can say the decl is an alias, get the next link via wasm.get_aliasee().
+
+Std.io is rendered with renderNamespacePage()
+Mostly just get members with wasm.namespace_members() then call renderNamespace().
+For each member, categorise it and add it to the relevant section, use things like declIndexName() to display info about it.
+
+In the case of the std.io reader/writer types, I expect them to be added to the typesList.
+Many are aliases. The JS tracks the original (initial) ID and the ID it ends up resolving to (member).
+The displayed name is the original name, but the href is the navLinkDeclIndex() of the resolved ID.
+I modified the JS to include the original and resolved names to the typesList.
+Then via JS debugging I can see:
+    GenericReader and GenericWriter are not aliases.
+    Reader --> GenericReader.
+    Writer --> GenericWriter.
+    AnyReader --> Reader (but which one?)
+    AnyWriter --> Writer (but which one?)
+
+Aside: when breaking on the completed typesList, there are 4 entries that have no name fields.
+    AnyReader, AnyWriter, BufferedAtomicFile, StreamSource
+But if I manually call declIndexName() with their IDs it works.
+And the JS code immediately after this puts them into the DOM. This also calls declIndexName(), and this also works.
+A bug in the debugger, some limitation of JS I don't understand, or something else?
+
+Which Reader is AnyReader resolving to?
+    original=479 member=225
+    fullyQualifiedName(479) = std.io.AnyReader
+    fullyQualifiedName(225) = std.io.Reader
+
+std.io.Reader is defined in io.zig as `pub const Reader = GenericReader`
+std.io.AnyReader is defined in io.zig as `pub const AnyReader = @import("io/Reader.zig")`
+
+
+Time to dig into the wasm to understand how std.io.AnyReader gets categorised by categorize_decl().
+decl_index.get() == Walk.decls.items[index]
+Each Decl has fields `file: Walk.File.Index` and `ast_node: Ast.Node.Index`
+Categorising a Decl is then `file.categorize_decl(ast_node)`
+For the AnyReader:
+    wasm_exports.categorize_decl(479, 0)
+    Ends up in Walk.File.Index.categorize_builtin_call()
+    Sees the @import, finds a File it previously loaded for that path, then resolves the alias to the root decl in that file.
+    This seems reasonable.
+
+The text displayed on the page is the declIndexName(original_decl)
+But the link points to navLinkDeclIndex(resolved_alias_decl)
+navLinkDeclIndex(foo) is just "#" + fullyQualifiedName(foo)
+Which is a wrapper around wasm_exports.decl_fqn(), which ends up in Decl.fqn().
+For id=225 the initial path is "std.io.Reader." and there is no parent. This also seems reasonable.
+
+
+Ok...
+Manually navigating to localhost#std.io.AnyReader does return the correct docs.
+Look at JS in more detail around page loading.
+
+When URI #fragment changes, call onHashChange() -> navigate() -> updateCurNav().
+updateCurNav() takes the fragment part and calls e.g. findDecl("std.io.Reader").
+Then sets curNav.decl = findDecl(), which just wraps wasm_exports.find_decl()
+This does Decl.find() as the preferred result. If this doesn't find anything, it falls back to comparing the search string to every decl's FQN.
+For URL#std.io.Reader the preferred Decl.find() yields a result.
+For URL#std.io.AnyReader the preferred Decl.find() yields a result.
+
+Decl.find() walks each component (e.g. `std` then `io` then `Reader`), resolving aliases at each step.
+
+
+So it seems that the JS is doing unnecessary and ultimately harmful work.
+When rendering the std.io namespace page, it resolves std.io.AnyReader to an aliasee that is ambiguous.
+And whenever we navigate to a specific decl, the JS calls wasm_exports.find_decl(), which also resolves aliases.
+So what if we skip the alias resolution in JS? Just link to the fqn of the alias, not the aliasee.
+
+
+Let's test how many decls are affected like this.
+For every decl, note the original fqn and the fqn after JS resolves any alias.
+Then for each fqn pair, run wasm_exports.find_decl() and note the resulting decl index.
+Count how many pairs have non-identical decl indexes.
+Eh, not that useful. There are lots, and that's valid.
+
