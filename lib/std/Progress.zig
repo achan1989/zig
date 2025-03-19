@@ -308,6 +308,9 @@ pub const Node = struct {
 
         const parent_ptr = parentByIndex(free_index);
         const current_parent = @atomicLoad(Node.Parent, parent_ptr, .acquire);
+        if (current_parent != .unused) {
+            std.process.fatal("current_parent != .unused", .{});
+        }
         assert(current_parent == .unused);
         @atomicStore(Node.Parent, parent_ptr, parent, .release);
 
